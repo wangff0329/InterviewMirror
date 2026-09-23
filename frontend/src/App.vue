@@ -6,6 +6,7 @@ const navItems = [
   { id: "profile", label: "我的资料", icon: "◌" },
   { id: "question-bank", label: "题库练习", icon: "▤" },
   { id: "job-analysis", label: "岗位分析", icon: "⌁" },
+  { id: "application", label: "网申适配", icon: "□" },
   { id: "records", label: "练习记录", icon: "◷" },
 ];
 
@@ -16,12 +17,19 @@ const loading = ref(false);
 const bankLoading = ref(false);
 const error = ref("");
 const result = ref(null);
+const applicationResult = ref(null);
 const evaluation = ref(null);
 const answer = ref("");
 const selectedQuestion = ref(null);
 const questionBank = ref([]);
 const bankCategory = ref("全部");
 const configOpen = ref(false);
+const sidebarCollapsed = ref(false);
+const authMode = ref("login");
+const authLoading = ref(false);
+const authError = ref("");
+const authUser = ref(null);
+const authForm = ref({ email: "", password: "" });
 const profileSaved = ref(false);
 const records = ref([]);
 const strengthInput = ref("");
@@ -36,6 +44,7 @@ const profileCompletion = computed(() => {
   const fields = [profile.value.target_role, profile.value.target_company, profile.value.strengths.length, profile.value.signature_experience, profile.value.custom_notes];
   return Math.round((fields.filter(Boolean).length / fields.length) * 100);
 });
+const isAuthenticated = computed(() => Boolean(authUser.value));
 
 function loadLocalState() {
   try {
@@ -50,10 +59,56 @@ function loadLocalState() {
   }
 }
 
+async function submitAuth() {
+  authLoading.value = true;
+  authError.value = "";
+  localStorage.setItem("interviewMirrorModel", JSON.stringify(modelConfig.value));
+  try {
+    const response = await fetch(`/api/auth/${authMode.value}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(authForm.value),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || "认证失败，请稍后重试。");
+    localStorage.setItem("interviewMirrorToken", data.access_token);
+    authUser.value = data.user;
+    authForm.value.password = "";
+    loadQuestionBank();
+  } catch (cause) {
+    authError.value = cause.message;
+  } finally {
+    authLoading.value = false;
+  }
+}
+
+async function restoreAuth() {
+  const token = localStorage.getItem("interviewMirrorToken");
+  if (!token) return;
+  try {
+    const response = await fetch("/api/auth/me", { headers: { Authorization: `Bearer ${token}` } });
+    if (!response.ok) throw new Error("登录状态已失效。");
+    authUser.value = await response.json();
+  } catch {
+    localStorage.removeItem("interviewMirrorToken");
+  }
+}
+
+function logout() {
+  localStorage.removeItem("interviewMirrorToken");
+  authUser.value = null;
+  activeView.value = "dashboard";
+}
+
 function saveProfile() {
   localStorage.setItem("interviewMirrorProfile", JSON.stringify(profile.value));
   profileSaved.value = true;
   setTimeout(() => (profileSaved.value = false), 2200);
+}
+
+function saveModelConfig() {
+  localStorage.setItem("interviewMirrorModel", JSON.stringify(modelConfig.value));
+  configOpen.value = false;
 }
 
 function addStrength() {
@@ -85,6 +140,10 @@ function onDrop(event) {
 
 function formatSize(bytes) {
   return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
+}
+
+function copyText(text) {
+  navigator.clipboard?.writeText(text);
 }
 
 function openView(view) {
@@ -126,6 +185,32 @@ async function generate() {
     result.value = data;
     saveRecord(data);
     activeView.value = "job-analysis";
+  } catch (cause) {
+    error.value = cause.message;
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function adaptApplication() {
+  if (!isReady.value) return (error.value = "请先上传简历并填写岗位要求。");
+  if (!apiConfigured.value) {
+    error.value = "在线模型需要填写 Base URL 和 API Key。";
+    configOpen.value = true;
+    return;
+  }
+  loading.value = true;
+  error.value = "";
+  const formData = new FormData();
+  formData.append("resume", file.value);
+  formData.append("job_description", jobDescription.value);
+  formData.append("model_config", JSON.stringify(modelConfig.value));
+  formData.append("profile", JSON.stringify(profile.value));
+  try {
+    const response = await fetch("/api/applications/adapt", { method: "POST", body: formData });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || "网申适配失败，请稍后重试。");
+    applicationResult.value = data;
   } catch (cause) {
     error.value = cause.message;
   } finally {
@@ -190,23 +275,30 @@ watch(bankCategory, async (category) => {
 
 onMounted(() => {
   loadLocalState();
-  loadQuestionBank();
+  restoreAuth().then(() => {
+    if (authUser.value) loadQuestionBank();
+  });
 });
 </script>
 
 <template>
-  <div class="app-shell">
+  <section v-if="!isAuthenticated" class="auth-screen">
+    <div class="auth-intro"><span class="brand-mark">IM</span><p class="eyebrow">INTERVIEW MIRROR</p><h1>让每一次准备，<em>都更接近理想岗位。</em></h1><p>登录后保存你的候选人资料、岗位分析和练习记录。模型配置也会跟随当前浏览器保存。</p></div>
+    <div class="auth-panel"><div class="auth-tabs"><button :class="{ active: authMode === 'login' }" @click="authMode = 'login'; authError = ''">登录</button><button :class="{ active: authMode === 'register' }" @click="authMode = 'register'; authError = ''">注册</button></div><h2>{{ authMode === "login" ? "欢迎回来" : "创建你的账号" }}</h2><p class="auth-caption">{{ authMode === "login" ? "继续你的面试准备工作。" : "先建立账号，之后可以跨设备保存准备记录。" }}</p><form @submit.prevent="submitAuth"><label class="field-label">邮箱<input v-model.trim="authForm.email" type="email" autocomplete="email" placeholder="you@example.com" required /></label><label class="field-label">密码<input v-model="authForm.password" :autocomplete="authMode === 'login' ? 'current-password' : 'new-password'" type="password" placeholder="至少 8 位字符" minlength="8" required /></label><div class="auth-api"><div class="auth-api-head"><div><span class="card-eyebrow">MODEL CONFIGURATION</span><strong>登录后使用哪个 AI？</strong></div><span>{{ modelConfig.provider === "demo" ? "Demo" : "已配置" }}</span></div><label class="field-label">模式<select v-model="modelConfig.provider"><option value="demo">Demo（无需 API Key）</option><option value="openai-compatible">OpenAI-compatible API</option></select></label><template v-if="modelConfig.provider === 'openai-compatible'"><label class="field-label">Base URL<input v-model.trim="modelConfig.base_url" placeholder="https://api.openai.com/v1" /></label><label class="field-label">API Key<input v-model="modelConfig.api_key" type="password" placeholder="sk-..." /></label><label class="field-label">模型名称<input v-model.trim="modelConfig.model" placeholder="gpt-4o-mini" /></label></template><p>配置仅保存在当前浏览器，不会发送到登录接口。</p></div><p v-if="authError" class="auth-error" role="alert">{{ authError }}</p><button class="primary-button auth-submit" :disabled="authLoading" type="submit"><span>{{ authLoading ? "请稍候..." : authMode === "login" ? "登录并进入工作台" : "注册并开始使用" }}</span><b>→</b></button></form></div>
+  </section>
+  <div v-else class="app-shell" :class="{ 'sidebar-collapsed': sidebarCollapsed }">
     <aside class="sidebar">
-      <a class="brand" href="#" @click.prevent="openView('dashboard')"><span class="brand-mark">IM</span><span><strong>Interview Mirror</strong><small>AI interview workbench</small></span></a>
+      <a class="brand" href="#" @click.prevent="openView('dashboard')"><span class="brand-mark">IM</span><span class="sidebar-copy"><strong>Interview Mirror</strong><small>AI interview workbench</small></span></a>
       <div class="workspace-label">WORKSPACE</div>
-      <nav class="nav-list"><button v-for="item in navItems" :key="item.id" :class="{ active: activeView === item.id }" @click="openView(item.id)"><span class="nav-icon">{{ item.icon }}</span><span>{{ item.label }}</span><b v-if="item.id === 'question-bank' && questionBank.length">{{ questionBank.length }}</b></button></nav>
+      <nav class="nav-list"><button v-for="item in navItems" :key="item.id" :class="{ active: activeView === item.id }" :title="sidebarCollapsed ? item.label : undefined" @click="openView(item.id)"><span class="nav-icon">{{ item.icon }}</span><span class="sidebar-copy">{{ item.label }}</span><b v-if="item.id === 'question-bank' && questionBank.length">{{ questionBank.length }}</b></button></nav>
       <div class="sidebar-spacer" />
-      <div class="profile-meter"><div class="meter-head"><span>我的资料</span><strong>{{ profileCompletion }}%</strong></div><div class="meter-track"><i :style="{ width: `${profileCompletion}%` }" /></div><button @click="openView('profile')">{{ profileCompletion === 100 ? "资料已完善" : "完善候选人画像" }} →</button></div>
-      <button class="sidebar-settings" @click="configOpen = true">⚙ <span>模型设置</span></button>
+      <div class="profile-meter"><div class="meter-head sidebar-copy"><span>我的资料</span><strong>{{ profileCompletion }}%</strong></div><div class="meter-track"><i :style="{ width: `${profileCompletion}%` }" /></div><button class="sidebar-copy" @click="openView('profile')">{{ profileCompletion === 100 ? "资料已完善" : "完善候选人画像" }} →</button></div>
+      <button class="sidebar-settings" title="模型设置" @click="configOpen = true">⚙ <span class="sidebar-copy">模型设置</span></button>
+      <button class="sidebar-toggle" :title="sidebarCollapsed ? '展开菜单' : '折叠菜单'" @click="sidebarCollapsed = !sidebarCollapsed"><span>{{ sidebarCollapsed ? '→' : '←' }}</span><span class="sidebar-copy">{{ sidebarCollapsed ? '展开菜单' : '折叠菜单' }}</span></button>
     </aside>
 
     <main class="main-content">
-      <header class="topbar"><div><span class="breadcrumb">WORKSPACE /</span><strong>{{ currentNav?.label }}</strong></div><div class="top-actions"><span class="api-status"><i /> {{ modelConfig.provider === "demo" ? "Demo mode" : modelConfig.model }}</span><button class="icon-button" title="清空本次会话" @click="clearSession">↺</button><span class="user-avatar">Y</span></div></header>
+      <header class="topbar"><div><span class="breadcrumb">WORKSPACE /</span><strong>{{ currentNav?.label }}</strong></div><div class="top-actions"><span class="api-status"><i /> {{ modelConfig.provider === "demo" ? "Demo mode" : modelConfig.model }}</span><button class="icon-button" title="清空本次会话" @click="clearSession">↺</button><button class="user-avatar" :title="`退出 ${authUser.email}`" @click="logout">{{ authUser.email.slice(0, 1).toUpperCase() }}</button></div></header>
       <div class="page-wrap">
         <div v-if="error" class="alert" role="alert"><strong>需要注意</strong><span>{{ error }}</span><button @click="error = ''">×</button></div>
 
@@ -222,10 +314,16 @@ onMounted(() => {
 
         <section v-else-if="activeView === 'job-analysis'" class="view"><div class="page-heading compact-heading"><div><p class="eyebrow">RESUME × JOB MATCH</p><h1>岗位分析</h1><p class="heading-copy">让 AI 从你的经历里找出匹配点、风险点，以及面试官会继续追问的地方。</p></div><span class="flow-label">RESUME <b>×</b> JOB <b>→</b> QUESTIONS</span></div><div v-if="!result" class="analysis-start"><div class="analysis-form"><label class="field-label" for="resume">简历文件 <span>PDF / MAX 10 MB</span></label><label class="dropzone" for="resume" @dragover.prevent @drop.prevent="onDrop"><input id="resume" type="file" accept="application/pdf,.pdf" @change="selectFile" /><template v-if="!file"><span class="upload-symbol">↑</span><strong>拖拽简历到这里</strong><small>或点击选择 PDF 文件</small></template><template v-else><span class="file-symbol">PDF</span><strong>{{ file.name }}</strong><small>{{ formatSize(file.size) }} · 已准备好分析</small></template></label><label class="field-label" for="job">目标岗位要求 <span>{{ jobDescription.length }} / 8000</span></label><textarea id="job" v-model="jobDescription" rows="9" maxlength="8000" placeholder="粘贴职位描述、团队介绍或你想重点准备的能力..." /><div class="form-footer"><span>已使用 {{ profile.strengths.length }} 项个人优势</span><button class="link-button" @click="openView('profile')">编辑我的资料 →</button></div><button class="primary-button" :disabled="loading" @click="generate"><span>{{ loading ? "正在分析资料..." : "开始岗位分析" }}</span><b>→</b></button></div><div class="analysis-explainer"><span class="empty-icon">⌁</span><h2>一份分析，三种准备方向</h2><div><strong>匹配度</strong><p>哪些经历与你的目标岗位最相关。</p></div><div><strong>风险点</strong><p>哪些地方可能被面试官继续追问。</p></div><div><strong>练习题</strong><p>从你的简历和岗位要求生成问题。</p></div></div></div><div v-else class="analysis-result"><div class="analysis-summary"><div class="score-block"><span>岗位匹配度</span><strong>{{ result.plan.match_score }}</strong><small>/ 100</small><i><b :style="{ width: `${result.plan.match_score}%` }" /></i></div><div class="summary-copy"><span class="eyebrow">MATCH SUMMARY</span><h2>{{ result.plan.match_summary }}</h2><p>{{ result.plan.candidate_summary }}</p></div><button class="outline-button" @click="result = null">重新分析</button></div><div class="analysis-columns"><div><div class="result-heading"><h2>匹配点</h2><span>{{ result.plan.matching_points.length }} points</span></div><ul class="insight-list positive"><li v-for="point in result.plan.matching_points" :key="point">{{ point }}</li></ul></div><div><div class="result-heading"><h2>风险点</h2><span>{{ result.plan.risk_points.length }} points</span></div><ul class="insight-list caution"><li v-for="point in result.plan.risk_points" :key="point">{{ point }}</li></ul></div></div><div class="questions-heading"><h2>针对这个岗位的问题</h2><span>{{ result.plan.questions.length }} questions</span></div><div class="analysis-question-list"><article v-for="(question, index) in result.plan.questions" :key="question.question" class="analysis-question"><span>{{ String(index + 1).padStart(2, "0") }}</span><div><div class="question-top"><span class="tag">{{ question.category }}</span><span class="difficulty">{{ question.difficulty }}</span></div><h3>{{ question.question }}</h3><p><strong>考察意图：</strong>{{ question.intent }}</p></div><button class="text-button" @click="startQuestion({ ...question, id: `job-${index}`, tips: [] })">去回答 →</button></article></div></div></section>
 
+        <section v-else-if="activeView === 'application'" class="view">
+          <div class="page-heading compact-heading"><div><p class="eyebrow">APPLICATION ADAPTER</p><h1>网申适配</h1><p class="heading-copy">根据岗位目标重新组织你的真实经历，让每一份申请材料都更贴近岗位。</p></div><span class="flow-label">FACTS <b>→</b> POSITIONING <b>→</b> APPLICATION</span></div>
+          <div v-if="!applicationResult" class="analysis-start"><div class="analysis-form"><div class="adapter-callout"><strong>同一份简历，不同的表达重点</strong><p>AI 会根据岗位要求调整个人简介、经历要点和开放题回答。不会自动添加简历中不存在的事实。</p></div><label class="field-label" for="application-resume">简历文件 <span>PDF / MAX 10 MB</span></label><label class="dropzone" for="application-resume" @dragover.prevent @drop.prevent="onDrop"><input id="application-resume" type="file" accept="application/pdf,.pdf" @change="selectFile" /><template v-if="!file"><span class="upload-symbol">↑</span><strong>拖拽简历到这里</strong><small>或点击选择 PDF 文件</small></template><template v-else><span class="file-symbol">PDF</span><strong>{{ file.name }}</strong><small>{{ formatSize(file.size) }} · 已准备好分析</small></template></label><label class="field-label" for="application-job">目标岗位要求 <span>{{ jobDescription.length }} / 8000</span></label><textarea id="application-job" v-model="jobDescription" rows="9" maxlength="8000" placeholder="粘贴职位描述、申请表问题或岗位关键词..." /><div class="form-footer"><span>已使用 {{ profile.strengths.length }} 项个人优势</span><button class="link-button" @click="openView('profile')">编辑我的资料 →</button></div><button class="primary-button" :disabled="loading" @click="adaptApplication"><span>{{ loading ? "正在调整申请材料..." : "生成网申适配包" }}</span><b>→</b></button></div><div class="analysis-explainer application-explainer"><span class="empty-icon">□</span><h2>帮你完成网申里的关键输入</h2><div><strong>个人简介</strong><p>结合岗位关键词，生成可直接修改的候选人简介。</p></div><div><strong>经历要点</strong><p>把最相关的项目放在前面，强化结果和个人贡献。</p></div><div><strong>开放问题</strong><p>准备求职动机、优势等常见申请表回答。</p></div></div></div>
+          <div v-else class="adaptation-result"><div class="adaptation-header"><div><span class="eyebrow">TAILORED FOR {{ applicationResult.adaptation.target_role.toUpperCase() }}</span><h2>{{ applicationResult.adaptation.positioning }}</h2></div><button class="outline-button" @click="applicationResult = null">重新适配</button></div><div class="keyword-row"><span v-for="keyword in applicationResult.adaptation.keywords" :key="keyword">{{ keyword }}</span></div><div class="adaptation-grid"><article class="adaptation-card wide"><div class="result-heading"><h2>岗位定制个人简介</h2><button class="text-button" @click="copyText(applicationResult.adaptation.profile_summary)">复制</button></div><p class="copy-block">{{ applicationResult.adaptation.profile_summary }}</p></article><article class="adaptation-card"><h2>求职动机</h2><p class="copy-block">{{ applicationResult.adaptation.motivation_answer }}</p></article><article class="adaptation-card wide"><h2>经历要点改写</h2><div class="bullet-list"><p v-for="bullet in applicationResult.adaptation.tailored_bullets" :key="bullet">＋ {{ bullet }}</p></div></article><article class="adaptation-card wide"><h2>网申常见开放题</h2><div class="application-answers"><div v-for="item in applicationResult.adaptation.application_questions" :key="item.question"><strong>{{ item.question }}</strong><p>{{ item.answer }}</p></div></div></article></div><div class="caution-box"><strong>提交前请核对</strong><p v-for="caution in applicationResult.adaptation.cautions" :key="caution">! {{ caution }}</p></div></div>
+        </section>
+
         <section v-else class="view"><div class="page-heading compact-heading"><div><p class="eyebrow">PRACTICE HISTORY</p><h1>练习记录</h1><p class="heading-copy">把每次练习留下来，看到自己回答方式的变化。</p></div></div><div v-if="!records.length" class="empty-history"><span>◷</span><h2>还没有练习记录</h2><p>完成一次岗位分析后，这里会保存你的匹配结果。</p><button class="dark-button standalone" @click="openView('job-analysis')">开始第一次分析 →</button></div><div v-else class="record-list"><article v-for="record in records" :key="record.id" class="record-row"><div class="record-mark">IM</div><div><span>{{ record.createdAt }} · {{ record.filename }}</span><h3>岗位匹配度 {{ record.score }} / 100</h3><p>{{ record.summary }}</p></div><button class="text-button" @click="openView('job-analysis')">查看 →</button></article></div></section>
       </div>
     </main>
 
-    <div v-if="configOpen" class="modal-backdrop" @click.self="configOpen = false"><section class="modal"><div class="modal-header"><div><p class="eyebrow">MODEL PROVIDER</p><h2>配置你的 AI</h2></div><button class="close-button" @click="configOpen = false">×</button></div><p class="modal-copy">配置只在当前浏览器保存，并随请求发送给后端。后端不会持久化你的 API Key。</p><label class="field-label">模式<select v-model="modelConfig.provider"><option value="demo">Demo（无需 API Key）</option><option value="openai-compatible">OpenAI-compatible API</option></select></label><template v-if="modelConfig.provider === 'openai-compatible'"><label class="field-label">Base URL<input v-model="modelConfig.base_url" placeholder="https://api.openai.com/v1" /></label><label class="field-label">API Key<input v-model="modelConfig.api_key" type="password" placeholder="sk-..." /></label><label class="field-label">模型名称<input v-model="modelConfig.model" placeholder="gpt-4o-mini" /></label></template><div class="modal-actions"><button class="secondary-button" @click="localStorage.setItem('interviewMirrorModel', JSON.stringify(modelConfig)); configOpen = false">保存并关闭</button></div></section></div>
+    <div v-if="configOpen" class="modal-backdrop" @click.self="configOpen = false"><section class="modal"><div class="modal-header"><div><p class="eyebrow">MODEL PROVIDER</p><h2>配置你的 AI</h2></div><button class="close-button" @click="configOpen = false">×</button></div><p class="modal-copy">配置只在当前浏览器保存，并随请求发送给后端。后端不会持久化你的 API Key。</p><label class="field-label">模式<select v-model="modelConfig.provider"><option value="demo">Demo（无需 API Key）</option><option value="openai-compatible">OpenAI-compatible API</option></select></label><template v-if="modelConfig.provider === 'openai-compatible'"><label class="field-label">Base URL<input v-model="modelConfig.base_url" placeholder="https://api.openai.com/v1" /></label><label class="field-label">API Key<input v-model="modelConfig.api_key" type="password" placeholder="sk-..." /></label><label class="field-label">模型名称<input v-model="modelConfig.model" placeholder="gpt-4o-mini" /></label></template><div class="modal-actions"><button class="secondary-button" @click="saveModelConfig">保存并关闭</button></div></section></div>
   </div>
 </template>

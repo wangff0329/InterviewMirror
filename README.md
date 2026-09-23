@@ -62,10 +62,22 @@ The API accepts an OpenAI-compatible configuration:
 ## API
 
 - `GET /api/health`
+- `GET /api/question-bank`
 - `POST /api/interviews/generate`
   - multipart field: `resume`
   - form field: `job_description`
   - form field: `model_config` (JSON string)
+- `POST /api/interviews/evaluate`
+  - form field: `question_json`
+  - form field: `answer`
+  - form field: `model_config`
+- `POST /api/applications/adapt`
+  - multipart field: `resume`
+  - form field: `job_description`
+  - form field: `model_config`
+  - form field: `profile`
+
+`/api/applications/adapt` returns a job-specific application pack: positioning, personal summary, rewritten experience bullets, motivation answer, common application questions, keywords, and fact-check cautions.
 
 ## Tests
 
