@@ -8,8 +8,10 @@ Requires-Dist: uvicorn[standard]>=0.30.0
 Requires-Dist: python-multipart>=0.0.9
 Requires-Dist: pydantic-settings>=2.5.0
 Requires-Dist: pypdf>=5.0.0
+Requires-Dist: python-docx>=1.1.0
 Requires-Dist: langgraph>=0.2.0
 Requires-Dist: langchain-openai>=0.2.0
+Requires-Dist: httpx>=0.27.0
 Provides-Extra: dev
 Requires-Dist: httpx>=0.27.0; extra == "dev"
 Requires-Dist: pytest>=8.3.0; extra == "dev"

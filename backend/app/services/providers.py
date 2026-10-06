@@ -10,6 +10,8 @@ from app.schemas import (
     ModelConfig,
     QuestionBankItem,
     ApplicationAdaptation,
+    InterviewSessionAnalysis,
+    InterviewSessionTurn,
 )
 
 
@@ -146,6 +148,51 @@ def evaluate_answer(question: QuestionBankItem, answer: str, config: ModelConfig
     return AnswerEvaluation.model_validate(_extract_json(result.content))
 
 
+def analyze_interview_session(
+    turns: list[InterviewSessionTurn], config: ModelConfig
+) -> InterviewSessionAnalysis:
+    if not turns:
+        raise ValueError("至少完成一轮回答后才能生成整场分析。")
+    if config.provider == "demo":
+        average = round(sum(turn.evaluation.overall_score for turn in turns) / len(turns))
+        return InterviewSessionAnalysis(
+            overall_score=average,
+            summary=f"你完成了 {len(turns)} 轮回答，已经建立了基本的表达主线。下一步要把每个案例的个人动作和结果说得更具体。",
+            strengths=["能够围绕真实经历作答", "愿意根据反馈继续练习"],
+            priorities=["补充量化结果和影响范围", "减少背景铺垫，突出本人采取的关键行动"],
+            recurring_follow_ups=[turn.evaluation.follow_up_questions[0] for turn in turns if turn.evaluation.follow_up_questions][:3],
+            next_practice_plan=["用 STAR 结构重答一个项目案例", "准备一个失败复盘案例", "为每段经历补充一个可验证结果"],
+        )
+    if not config.api_key or not config.base_url:
+        raise ValueError("在线模型需要同时配置 API Key 和 Base URL。")
+    llm = ChatOpenAI(
+        api_key=config.api_key,
+        base_url=config.base_url.rstrip("/"),
+        model=config.model,
+        temperature=config.temperature,
+    )
+    transcript = "\n\n".join(
+        f"问题：{turn.question}\n回答：{turn.answer}\n本轮评分：{turn.evaluation.model_dump_json()}"
+        for turn in turns
+    )
+    prompt = f"""
+你是一名资深面试教练。请分析下面这场面试的多轮回答，只返回 JSON，不要 Markdown：
+{{
+  "overall_score": 0,
+  "summary": "整场表现总结",
+  "strengths": ["反复体现的优势"],
+  "priorities": ["最需要改进的地方"],
+  "recurring_follow_ups": ["建议继续追问的问题"],
+  "next_practice_plan": ["具体训练计划"]
+}}
+评分范围 0-100。必须结合回答中的事实，指出跨多轮反复出现的问题，不要泛泛而谈。
+面试记录：
+{transcript[:50000]}
+"""
+    result = llm.invoke(prompt)
+    return InterviewSessionAnalysis.model_validate(_extract_json(result.content))
+
+
 DEMO_ADAPTATION = ApplicationAdaptation(
     target_role="目标岗位",
     positioning="把你的项目执行力、数据意识和跨团队推动能力放在最前面，形成“能把复杂事情落地”的候选人定位。",
@@ -210,14 +257,21 @@ def adapt_application(
 
 def _extract_json(content: str) -> dict[str, Any]:
     cleaned = content.strip().replace("```json", "").replace("```", "").strip()
-    return json.loads(cleaned)
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        start = cleaned.find("{")
+        if start < 0:
+            raise
+        payload, _ = json.JSONDecoder().raw_decode(cleaned[start:])
+        return payload
 
 
 def generate_plan(
     job_description: str,
     resume_text: str,
     config: ModelConfig,
-    profile: CandidateProfile | None = None,
+    profile: CandidateProfile | dict | None = None,
 ) -> InterviewPlan:
     if config.provider == "demo":
         return DEMO_PLAN
@@ -246,11 +300,13 @@ JSON schema:
       "question": "string",
       "intent": "string",
       "difficulty": "easy|medium|hard",
-      "resume_evidence": "string"
+      "resume_evidence": "简历中的具体项目/经历证据",
+      "job_requirement": "岗位要求中的具体能力",
+      "follow_up_points": ["针对这道题的追问方向"]
     }}
   ]
 }}
-至少生成 6 道问题，问题必须结合简历中的真实经历，避免泛泛而谈。
+至少生成 6 道问题。每道问题必须结合简历中的真实经历，并填写 resume_evidence、job_requirement 和 follow_up_points，避免泛泛而谈。
 
 岗位要求：
 {job_description[:12000]}
@@ -259,7 +315,7 @@ JSON schema:
 {resume_text[:50000]}
 
 候选人自定义画像：
-{profile.model_dump_json() if profile else "{}"}
+{json.dumps(profile.model_dump(mode="json") if isinstance(profile, CandidateProfile) else (profile or {}), ensure_ascii=False)}
 """
     result = llm.invoke(prompt)
     return InterviewPlan.model_validate(_extract_json(result.content))

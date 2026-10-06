@@ -11,12 +11,14 @@ class InterviewState(TypedDict, total=False):
     resume_bytes: bytes
     job_description: str
     model_config: ModelConfig
-    profile: CandidateProfile
+    profile: CandidateProfile | dict
     resume_text: str
     plan: InterviewPlan
 
 
 def extract_resume(state: InterviewState) -> InterviewState:
+    if "resume_text" in state:
+        return {"resume_text": state["resume_text"]}
     return {"resume_text": extract_pdf_text(state["resume_bytes"])}
 
 

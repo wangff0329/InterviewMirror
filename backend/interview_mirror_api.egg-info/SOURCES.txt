@@ -5,8 +5,11 @@ app/graph.py
 app/main.py
 app/schemas.py
 app/services/__init__.py
+app/services/auth.py
 app/services/pdf.py
+app/services/profile.py
 app/services/providers.py
+app/services/transcription.py
 interview_mirror_api.egg-info/PKG-INFO
 interview_mirror_api.egg-info/SOURCES.txt
 interview_mirror_api.egg-info/dependency_links.txt

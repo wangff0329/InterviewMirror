@@ -29,6 +29,7 @@ class ModelConfig(BaseModel):
     base_url: str | None = None
     api_key: str | None = None
     model: str = "gpt-4o-mini"
+    transcription_model: str = "whisper-1"
     temperature: float = Field(default=0.4, ge=0, le=2)
 
 
@@ -47,6 +48,8 @@ class InterviewQuestion(BaseModel):
     intent: str
     difficulty: Literal["easy", "medium", "hard"] = "medium"
     resume_evidence: str | None = None
+    job_requirement: str | None = None
+    follow_up_points: list[str] = Field(default_factory=list)
 
 
 class InterviewPlan(BaseModel):
@@ -87,6 +90,26 @@ class AnswerEvaluationResponse(BaseModel):
     question: QuestionBankItem
     answer: str
     evaluation: AnswerEvaluation
+
+
+class InterviewSessionTurn(BaseModel):
+    question: str
+    answer: str
+    evaluation: AnswerEvaluation
+
+
+class InterviewSessionAnalysis(BaseModel):
+    overall_score: int = Field(ge=0, le=100)
+    summary: str
+    strengths: list[str]
+    priorities: list[str]
+    recurring_follow_ups: list[str]
+    next_practice_plan: list[str]
+
+
+class TranscriptionResponse(BaseModel):
+    text: str
+    duration_seconds: float | None = None
 
 
 class ApplicationAdaptation(BaseModel):
