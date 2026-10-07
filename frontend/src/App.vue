@@ -699,8 +699,12 @@ onMounted(() => {
               >模型名称<input
                 v-model.trim="modelConfig.model"
                 placeholder="gpt-4o-mini" /></label
+            ><label class="field-label"
+              >语音转写模型<input
+                v-model.trim="modelConfig.transcription_model"
+                placeholder="whisper-1" /></label
           ></template>
-          <p>配置仅保存在当前浏览器，不会发送到登录接口。</p>
+          <p>语音转写需要服务商支持 /audio/transcriptions；DeepSeek 等聊天接口通常不支持。</p>
         </div>
         <p v-if="authError" class="auth-error" role="alert">{{ authError }}</p>
         <button
@@ -942,7 +946,6 @@ onMounted(() => {
                     <strong>{{ profileLoading ? "正在解析你的资料..." : "导入一份新的简历" }}</strong>
                     <small>支持 PDF / DOCX · 自动整理教育、项目、经历和技能</small>
                   </span>
-                  <b>选择文件 →</b>
                   <input
                     type="file"
                     accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -1727,6 +1730,10 @@ onMounted(() => {
             >Base URL<input
               v-model="modelConfig.base_url"
               placeholder="https://api.openai.com/v1" /></label
+            ><label class="field-label"
+              >语音转写模型<input
+                v-model="modelConfig.transcription_model"
+                placeholder="whisper-1" /></label
           ><label class="field-label"
             >API Key<input
               v-model="modelConfig.api_key"
