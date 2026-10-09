@@ -6,6 +6,7 @@ const navItems = [
   { id: "profile", label: "我的资料", icon: "◌" },
   { id: "question-bank", label: "题库练习", icon: "▤" },
   { id: "job-analysis", label: "岗位分析", icon: "⌁" },
+  { id: "resume-builder", label: "简历生成", icon: "▧" },
   { id: "application", label: "网申适配", icon: "□" },
   { id: "records", label: "练习记录", icon: "◷" },
 ];
@@ -13,6 +14,9 @@ const navItems = [
 const activeView = ref("dashboard");
 const file = ref(null);
 const jobDescription = ref("");
+const applicationRequirements = ref("");
+const resumeBuildFile = ref(null);
+const resumeBuildLoading = ref(false);
 const loading = ref(false);
 const bankLoading = ref(false);
 const error = ref("");
@@ -368,11 +372,67 @@ async function adaptApplication() {
     configOpen.value = true;
     return;
   }
+
+  function selectResumeBuildFile(event) {
+    const selected = event.target.files?.[0];
+    event.target.value = "";
+    if (!selected) return;
+    const allowed = [".pdf", ".docx"];
+    if (!allowed.some((suffix) => selected.name.toLowerCase().endsWith(suffix))) {
+      return (error.value = "简历生成只支持 PDF 或 DOCX 文件。");
+    }
+    if (selected.size > 10 * 1024 * 1024)
+      return (error.value = "简历不能超过 10 MB。");
+    error.value = "";
+    resumeBuildFile.value = selected;
+  }
+
+  async function generateResumeDocument() {
+    if (!resumeBuildFile.value && !profileVersions.value.length)
+      return (error.value = "请上传原始简历，或先在“我的资料”中保存一个资料版本。");
+    if (!jobDescription.value.trim())
+      return (error.value = "请先填写目标岗位要求。");
+    if (!apiConfigured.value) {
+      error.value = "在线模型需要填写 Base URL 和 API Key。";
+      configOpen.value = true;
+      return;
+    }
+    resumeBuildLoading.value = true;
+    error.value = "";
+    const formData = new FormData();
+    if (resumeBuildFile.value) formData.append("resume", resumeBuildFile.value);
+    formData.append("job_description", jobDescription.value);
+    formData.append("model_config", JSON.stringify(modelConfig.value));
+    formData.append("profile", JSON.stringify(profile.value));
+    try {
+      const response = await fetch("/api/resumes/generate", {
+        method: "POST",
+        headers: authHeaders(),
+        body: formData,
+      });
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.detail || "简历生成失败，请稍后重试。");
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "岗位定制简历.docx";
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (cause) {
+      error.value = cause.message;
+    } finally {
+      resumeBuildLoading.value = false;
+    }
+  }
   loading.value = true;
   error.value = "";
   const formData = new FormData();
   if (file.value) formData.append("resume", file.value);
   formData.append("job_description", jobDescription.value);
+  formData.append("application_requirements", applicationRequirements.value);
   formData.append("model_config", JSON.stringify(modelConfig.value));
   formData.append("profile", JSON.stringify(profile.value));
   try {
@@ -1485,6 +1545,91 @@ onMounted(() => {
           </div>
         </section>
 
+        <section v-else-if="activeView === 'resume-builder'" class="view">
+          <div class="page-heading compact-heading">
+            <div>
+              <p class="eyebrow">RESUME BUILDER</p>
+              <h1>简历生成</h1>
+              <p class="heading-copy">
+                基于你的原始简历和目标岗位，突出更相关的经历，生成可继续编辑的 DOCX 文档。
+              </p>
+            </div>
+            <span class="flow-label">ORIGINAL <b>→</b> TAILORED RESUME</span>
+          </div>
+          <div class="analysis-start">
+            <div class="analysis-form">
+              <div class="adapter-callout">
+                <strong>保留事实，只调整表达重点</strong>
+                <p>
+                  AI 会基于原始简历进行岗位定制，不会凭空添加经历、公司、数字或技能。生成后请打开文档再次核对。
+                </p>
+              </div>
+              <label class="field-label" for="resume-builder-file"
+                >原始简历 <span>PDF / DOCX · MAX 10 MB</span></label
+              >
+              <label class="resume-builder-upload">
+                <input
+                  id="resume-builder-file"
+                  type="file"
+                  accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                  @change="selectResumeBuildFile"
+                />
+                <span class="upload-symbol">↑</span>
+                <strong>{{ resumeBuildFile?.name || "点击选择原始简历" }}</strong>
+                <small>{{
+                  resumeBuildFile
+                    ? "文件已准备好生成"
+                    : profileVersions.length
+                      ? "未上传时将使用“我的资料”中的最新版本"
+                      : "请上传 PDF 或 DOCX 文件"
+                }}</small>
+              </label>
+              <label class="field-label" for="resume-builder-job"
+                >目标岗位要求
+                <span>{{ jobDescription.length }} / 8000</span></label
+              >
+              <textarea
+                id="resume-builder-job"
+                v-model="jobDescription"
+                rows="9"
+                maxlength="8000"
+                placeholder="粘贴职位描述、任职要求和岗位关键词..."
+              />
+              <div class="form-footer">
+                <span>输出格式：可编辑 DOCX 文档</span>
+                <button class="link-button" @click="openView('profile')">
+                  编辑我的资料 →
+                </button>
+              </div>
+              <button
+                class="primary-button"
+                :disabled="resumeBuildLoading"
+                @click="generateResumeDocument"
+              >
+                <span>{{
+                  resumeBuildLoading ? "正在生成简历..." : "生成岗位定制简历"
+                }}</span
+                ><b>↓</b>
+              </button>
+            </div>
+            <div class="analysis-explainer application-explainer">
+              <span class="empty-icon">▧</span>
+              <h2>生成后的文档会包含</h2>
+              <div>
+                <strong>岗位定制简介</strong>
+                <p>将与目标岗位最相关的能力放在更显眼的位置。</p>
+              </div>
+              <div>
+                <strong>经历要点</strong>
+                <p>在原有事实基础上调整顺序和表达，突出行动与结果。</p>
+              </div>
+              <div>
+                <strong>原始内容</strong>
+                <p>保留原简历文本作为核对依据，生成后可以继续编辑排版。</p>
+              </div>
+            </div>
+          </div>
+        </section>
         <section v-else-if="activeView === 'application'" class="view">
           <div class="page-heading compact-heading">
             <div>
@@ -1506,6 +1651,13 @@ onMounted(() => {
                   AI
                   会根据岗位要求调整个人简介、经历要点和开放题回答。不会自动添加简历中不存在的事实。
                 </p>
+              </div>
+              <div class="application-form-heading">
+                <span class="section-kicker">01</span>
+                <div>
+                  <strong>基础信息</strong>
+                  <p>提供简历和目标岗位，帮助 AI 判断你的匹配重点。</p>
+                </div>
               </div>
               <label class="field-label" for="application-resume"
                 >简历文件 <span>PDF / MAX 10 MB</span></label
@@ -1544,6 +1696,43 @@ onMounted(() => {
                 maxlength="8000"
                 placeholder="粘贴职位描述、申请表问题或岗位关键词..."
               />
+              <div class="application-input-section">
+                <div class="application-section-heading">
+                  <div>
+                    <span class="section-kicker">02</span>
+                    <strong>申请表问题与填写要求</strong>
+                  </div>
+                  <span>可选 · 支持自由填写</span>
+                </div>
+                <p class="application-input-hint">
+                  把网申中的个人评价、自我介绍、求职动机等问题粘贴到这里；每道题后补充字数限制、语气或格式要求，AI 会逐项生成。
+                </p>
+                <textarea
+                  id="application-requirements"
+                  v-model="applicationRequirements"
+                  rows="7"
+                  maxlength="12000"
+                  placeholder="例如：
+1. 请做一个自我介绍，300 字以内，突出与岗位相关的经历。
+2. 个人评价，150 字以内，语气真诚简洁。
+3. 为什么想申请这个岗位？限 500 字。"
+                />
+                <div class="application-input-footer">
+                  <span>示例：题目 + 字数上限 + 语气/格式要求</span>
+                  <span>{{ applicationRequirements.length }} / 12000</span>
+                </div>
+              </div>
+              <div class="application-input-section application-output-note">
+                <div class="application-section-heading">
+                  <div>
+                    <span class="section-kicker">03</span>
+                    <strong>生成内容</strong>
+                  </div>
+                </div>
+                <p class="application-input-hint">
+                  将生成个人简介、求职动机、经历要点，以及你在上方填写的申请题目答案；未填写申请题目时，会使用常见开放题作为参考。
+                </p>
+              </div>
               <div class="form-footer">
                 <span>已使用 {{ profile.strengths.length }} 项个人优势</span
                 ><button class="link-button" @click="openView('profile')">

@@ -218,6 +218,7 @@ def adapt_application(
     resume_text: str,
     config: ModelConfig,
     profile: CandidateProfile | None = None,
+    application_requirements: str = "",
 ) -> ApplicationAdaptation:
     if config.provider == "demo":
         return DEMO_ADAPTATION
@@ -230,7 +231,7 @@ def adapt_application(
         temperature=config.temperature,
     )
     prompt = f"""
-你是一名求职材料优化顾问。请根据岗位要求、候选人简历和候选人自定义画像，
+你是一名求职材料优化顾问。请根据岗位要求、候选人简历、候选人自定义画像和网申填写要求，
 生成一份“网申适配包”。目标是调整表达重点，而不是编造经历。
 所有内容只能基于简历事实；无法确认的数字、公司名、职责必须留在 cautions，
 不要擅自补全。只返回 JSON，不要 Markdown：
@@ -250,6 +251,9 @@ def adapt_application(
 {resume_text[:50000]}
 候选人自定义画像：
 {profile.model_dump_json() if profile else "{}"}
+网申问题与填写要求：
+{application_requirements[:12000] or "未提供。请生成 3 个常见开放题作为参考。"}
+处理网申问题时，必须逐项回答用户提供的问题，并严格遵守其中明确的字数、格式和语气要求。
 """
     result = llm.invoke(prompt)
     return ApplicationAdaptation.model_validate(_extract_json(result.content))

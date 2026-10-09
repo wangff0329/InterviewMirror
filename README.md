@@ -168,8 +168,15 @@ http://localhost:5173
 - `POST /api/applications/adapt`
   - `resume`：简历文件。
   - `job_description`：目标岗位要求。
+  - `application_requirements`：可选，用户自定义的网申问题及字数、格式、语气等填写要求。
   - `model_config`：JSON 格式的模型配置。
   - `profile`：候选人资料。
+- `POST /api/resumes/generate`
+  - `resume`：原始 PDF 或 DOCX 简历文件，可选；不上传时使用“我的资料”中的最新版本。
+  - `job_description`：目标岗位要求。
+  - `model_config`：JSON 格式的模型配置。
+  - `profile`：候选人资料。
+  - 返回：岗位定制后的可编辑 DOCX 文档。
 
 `/api/applications/adapt` 会返回岗位适配结果，包括个人定位、个人简介、改写后的经历要点、求职动机、常见申请问题、关键词以及事实核验提醒。
 

@@ -1,7 +1,7 @@
 import json
 import uuid
 
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
@@ -34,6 +34,7 @@ from app.services.profile import (
     save_profile_version,
 )
 from app.services.providers import adapt_application, analyze_interview_session, evaluate_answer, get_question_bank
+from app.services.resume_builder import build_resume_docx
 from app.services.transcription import transcribe_audio
 
 settings = get_settings()
@@ -252,6 +253,7 @@ async def generate_interview(
 async def adapt_application_materials(
     resume: UploadFile | None = File(None),
     job_description: str = Form(...),
+    application_requirements: str = Form("", alias="application_requirements"),
     model_config_json: str = Form(..., alias="model_config"),
     profile_json: str = Form("{}", alias="profile"),
     user: UserResponse = Depends(current_user),
@@ -279,7 +281,9 @@ async def adapt_application_materials(
         if saved_context:
             profile_data = {**saved_context["profile"], **profile_data}
         profile = CandidateProfile.model_validate(profile_data)
-        adaptation = adapt_application(job_description, resume_text, config, profile)
+        adaptation = adapt_application(
+            job_description, resume_text, config, profile, application_requirements
+        )
         return ApplicationAdaptationResponse(
             request_id=str(uuid.uuid4()),
             resume_filename=resume_filename,
@@ -290,3 +294,54 @@ async def adapt_application_materials(
         raise HTTPException(status_code=422, detail=str(error)) from error
     except Exception as error:
         raise HTTPException(status_code=502, detail=f"网申适配失败：{error}") from error
+
+
+@app.post("/api/resumes/generate")
+async def generate_resume_document(
+    resume: UploadFile | None = File(None),
+    job_description: str = Form(...),
+    model_config_json: str = Form(..., alias="model_config"),
+    profile_json: str = Form("{}", alias="profile"),
+    user: UserResponse = Depends(current_user),
+) -> Response:
+    if not job_description.strip():
+        raise HTTPException(status_code=422, detail="岗位要求不能为空。")
+    try:
+        config = ModelConfig.model_validate(json.loads(model_config_json))
+        profile_data = json.loads(profile_json)
+        saved_context = get_latest_profile_context(settings, user.id)
+        if resume:
+            filename = resume.filename or "resume.pdf"
+            if resume.content_type not in {
+                "application/pdf",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            } and not filename.lower().endswith((".pdf", ".docx")):
+                raise HTTPException(status_code=415, detail="简历生成只支持 PDF 或 DOCX 文件。")
+            content = await resume.read()
+            if len(content) > settings.max_resume_size_mb * 1024 * 1024:
+                raise HTTPException(status_code=413, detail=f"简历不能超过 {settings.max_resume_size_mb} MB。")
+            resume_text = extract_document_text(
+                content, filename, resume.content_type or ""
+            )
+            resume_filename = filename
+        elif saved_context:
+            resume_text = saved_context["resume_text"]
+            resume_filename = saved_context["filename"]
+        else:
+            raise HTTPException(status_code=422, detail="请先上传简历，或在“我的资料”中保存一个资料版本。")
+        if saved_context:
+            profile_data = {**saved_context["profile"], **profile_data}
+        profile = CandidateProfile.model_validate(profile_data)
+        adaptation = adapt_application(job_description, resume_text, config, profile)
+        content, filename = build_resume_docx(resume_text, adaptation, resume_filename)
+        return Response(
+            content=content,
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+    except HTTPException:
+        raise
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except Exception as error:
+        raise HTTPException(status_code=502, detail=f"简历生成失败：{error}") from error
