@@ -10,6 +10,9 @@ class Settings(BaseSettings):
     database_path: str = "interview_mirror.db"
     auth_secret: str = "change-this-secret-in-production"
     auth_token_expire_hours: int = 24
+    research_provider: str = "tavily"
+    research_api_key: str = ""
+    research_api_url: str = "https://api.tavily.com/search"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

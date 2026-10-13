@@ -10,6 +10,8 @@ Interview Mirror 是一个开源的 AI 模拟面试与求职准备工作台。�
 - **我的资料**：上传 PDF 或 DOCX 简历，自动整理教育经历、项目、工作经历和技能，并保存资料版本。
 - **网申适配**：根据目标岗位调整个人简介、经历要点、求职动机和常见申请问题的回答。
 - **练习记录**：保存和查看过往练习结果。
+- **长期记忆**：保存用户的优势、薄弱点、目标和训练计划，并按用户隔离。
+- **面经搜索**：通过搜索 API 查找牛客公开面经，只保存标题、摘要和来源链接，不批量抓取全文。
 - **Demo 模式**：本地开发时无需配置 API Key，也可以体验基础流程。
 
 ## 技术栈
@@ -155,6 +157,40 @@ http://localhost:5173
   - `question_json`：当前面试题 JSON。
   - `answer`：用户回答。
   - `model_config`：JSON 格式的模型配置。
+- `POST /api/interviews/session-analysis`
+  - `turns_json`：本场面试的问答和评价 JSON 数组。
+  - `job_description`：可选的目标岗位描述。
+  - `model_config`：JSON 格式的模型配置。
+  - 分析完成后会保存面试会话，并提炼优势、待改进项和训练计划为长期记忆。
+- `GET /api/interviews/sessions`：获取当前用户的历史面试会话。
+
+### 记忆接口
+
+- `POST /api/memory`：创建一条当前用户的结构化记忆。
+- `GET /api/memory?memory_type=weakness`：查询当前用户的记忆，可按类型筛选。
+- `DELETE /api/memory/{memory_id}`：删除当前用户的一条记忆。
+- `PUT /api/memory/{memory_id}`：更新当前用户的一条记忆。
+
+当前版本使用 SQLite 保存结构化记忆和面试会话，不强制依赖 Mem0。记忆存储通过后端服务层隔离，后续可以在不改变 API 的情况下接入 Mem0 或向量检索。原始会话、结构化记忆和未来的语义检索应分开保存，避免把每轮对话都无条件当作长期记忆。
+
+### 面经搜索接口
+
+- `GET /api/research/interview-experiences`
+  - `company`：公司名称，可选。
+  - `role`：目标岗位，可选。
+  - `keywords`：技术关键词或面试轮次，可选。
+  - `max_results`：最多返回 20 条，默认 8 条。
+  - 返回牛客公开页面的标题、摘要、URL 和来源，不返回网页全文。
+
+搜索服务配置：
+
+```env
+RESEARCH_PROVIDER=tavily
+RESEARCH_API_KEY=your-tavily-api-key
+RESEARCH_API_URL=https://api.tavily.com/search
+```
+
+搜索结果仅作为候选资料，使用时应保留来源链接并遵守牛客网、搜索服务商的服务条款和 robots 规则。
 
 ### 资料与网申接口
 

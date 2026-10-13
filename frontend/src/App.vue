@@ -9,6 +9,8 @@ const navItems = [
   { id: "resume-builder", label: "简历生成", icon: "▧" },
   { id: "application", label: "网申适配", icon: "□" },
   { id: "records", label: "练习记录", icon: "◷" },
+  { id: "memory", label: "我的记忆", icon: "✦" },
+  { id: "research", label: "面经搜索", icon: "⌕" },
 ];
 
 const activeView = ref("dashboard");
@@ -55,6 +57,13 @@ const profileDocumentId = ref(null);
 const profileVersions = ref([]);
 const profileLoading = ref(false);
 const records = ref([]);
+const memories = ref([]);
+const memoryLoading = ref(false);
+const memoryDraft = ref({ memory_type: "fact", content: "", confidence: 1 });
+const editingMemoryId = ref(null);
+const researchLoading = ref(false);
+const researchResults = ref([]);
+const researchForm = ref({ company: "", role: "", keywords: "" });
 const strengthInput = ref("");
 const modelConfig = ref({
   provider: "demo",
@@ -266,6 +275,102 @@ async function loadProfileVersions() {
   }
 }
 
+async function loadMemories() {
+  if (!authUser.value) return;
+  memoryLoading.value = true;
+  try {
+    const response = await fetch("/api/memory", { headers: authHeaders() });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || "记忆加载失败。");
+    memories.value = data;
+  } catch (cause) {
+    error.value = cause.message;
+  } finally {
+    memoryLoading.value = false;
+  }
+}
+
+function resetMemoryDraft() {
+  editingMemoryId.value = null;
+  memoryDraft.value = { memory_type: "fact", content: "", confidence: 1 };
+}
+
+function editMemory(memory) {
+  editingMemoryId.value = memory.id;
+  memoryDraft.value = {
+    memory_type: memory.memory_type,
+    content: memory.content,
+    confidence: memory.confidence,
+  };
+}
+
+async function saveMemory() {
+  if (!memoryDraft.value.content.trim())
+    return (error.value = "请先填写记忆内容。");
+  memoryLoading.value = true;
+  error.value = "";
+  const editing = editingMemoryId.value !== null;
+  try {
+    const response = await fetch(
+      editing ? `/api/memory/${editingMemoryId.value}` : "/api/memory",
+      {
+        method: editing ? "PUT" : "POST",
+        headers: { ...authHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify(memoryDraft.value),
+      },
+    );
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || "记忆保存失败。");
+    await loadMemories();
+    resetMemoryDraft();
+  } catch (cause) {
+    error.value = cause.message;
+  } finally {
+    memoryLoading.value = false;
+  }
+}
+
+async function removeMemory(id) {
+  if (!window.confirm("确定删除这条记忆吗？")) return;
+  memoryLoading.value = true;
+  try {
+    const response = await fetch(`/api/memory/${id}`, {
+      method: "DELETE",
+      headers: authHeaders(),
+    });
+    if (!response.ok) {
+      const data = await response.json();
+      throw new Error(data.detail || "记忆删除失败。");
+    }
+    memories.value = memories.value.filter((memory) => memory.id !== id);
+    if (editingMemoryId.value === id) resetMemoryDraft();
+  } catch (cause) {
+    error.value = cause.message;
+  } finally {
+    memoryLoading.value = false;
+  }
+}
+
+async function searchResearch() {
+  if (!researchForm.value.company.trim() && !researchForm.value.role.trim())
+    return (error.value = "请至少填写公司或岗位。");
+  researchLoading.value = true;
+  error.value = "";
+  try {
+    const params = new URLSearchParams(researchForm.value);
+    const response = await fetch(`/api/research/interview-experiences?${params}`, {
+      headers: authHeaders(),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || "面经搜索失败。");
+    researchResults.value = data.results || [];
+  } catch (cause) {
+    error.value = cause.message;
+  } finally {
+    researchLoading.value = false;
+  }
+}
+
 function saveModelConfig() {
   localStorage.setItem(
     "interviewMirrorModel",
@@ -319,6 +424,7 @@ function openView(view) {
   error.value = "";
   if (view === "question-bank" && !questionBank.value.length)
     loadQuestionBank();
+  if (view === "memory") loadMemories();
 }
 
 async function loadQuestionBank() {
@@ -602,6 +708,7 @@ async function finishInterview() {
   const formData = new FormData();
   formData.append("turns_json", JSON.stringify(interviewTurns.value));
   formData.append("model_config", JSON.stringify(modelConfig.value));
+  formData.append("job_description", jobDescription.value);
   try {
     const response = await fetch("/api/interviews/session-analysis", { method: "POST", headers: authHeaders(), body: formData });
     const data = await response.json();
@@ -668,6 +775,7 @@ onMounted(() => {
     if (authUser.value) {
       loadQuestionBank();
       loadProfileVersions();
+      loadMemories();
     }
   });
 });
@@ -973,6 +1081,108 @@ onMounted(() => {
               <span>⌁</span><strong>岗位分析</strong
               ><small>简历与岗位的匹配反馈</small>
             </button>
+          </div>
+        </section>
+
+        <section v-else-if="activeView === 'memory'" class="view">
+          <div class="page-heading compact-heading">
+            <div>
+              <p class="eyebrow">LONG-TERM MEMORY</p>
+              <h1>我的记忆</h1>
+              <p class="heading-copy">
+                面试总结会自动沉淀为优势、薄弱点和训练计划，也可以手动修订。
+              </p>
+            </div>
+            <span class="library-count">{{ memories.length }} MEMORIES</span>
+          </div>
+          <div class="memory-layout">
+            <div class="form-sheet memory-editor">
+              <div class="section-title">
+                <span>{{ editingMemoryId ? "EDIT" : "NEW" }}</span>
+                <div>
+                  <h2>{{ editingMemoryId ? "编辑记忆" : "添加一条记忆" }}</h2>
+                  <p>只保存稳定、可复用的信息；不确定的内容可以降低置信度。</p>
+                </div>
+              </div>
+              <label class="field-label">记忆类型<select v-model="memoryDraft.memory_type">
+                <option value="fact">事实</option>
+                <option value="strength">优势</option>
+                <option value="weakness">薄弱点</option>
+                <option value="preference">偏好</option>
+                <option value="goal">目标</option>
+                <option value="plan">训练计划</option>
+              </select></label>
+              <label class="field-label">内容<textarea v-model="memoryDraft.content" rows="5" placeholder="例如：回答 Redis 缓存一致性时容易遗漏异常场景。" /></label>
+              <label class="field-label">置信度
+                <input v-model.number="memoryDraft.confidence" type="range" min="0" max="1" step="0.05" />
+                <span class="range-value">{{ Math.round(memoryDraft.confidence * 100) }}%</span>
+              </label>
+              <div class="memory-editor-actions">
+                <button v-if="editingMemoryId" class="secondary-button" @click="resetMemoryDraft">取消编辑</button>
+                <button class="dark-button" :disabled="memoryLoading" @click="saveMemory">
+                  {{ memoryLoading ? "保存中..." : editingMemoryId ? "更新记忆" : "保存记忆" }} →
+                </button>
+              </div>
+            </div>
+            <div class="memory-list">
+              <div v-if="memoryLoading && !memories.length" class="empty-state">正在加载记忆...</div>
+              <div v-else-if="!memories.length" class="empty-state">
+                <strong>还没有长期记忆</strong>
+                <span>完成一次岗位专属面试后，系统会自动生成训练记忆。</span>
+              </div>
+              <article v-for="memory in memories" :key="memory.id" class="memory-card">
+                <div class="memory-card-head">
+                  <span class="tag">{{ { fact: "事实", strength: "优势", weakness: "薄弱点", preference: "偏好", goal: "目标", plan: "训练计划" }[memory.memory_type] }}</span>
+                  <small>{{ Math.round(memory.confidence * 100) }}% 置信度</small>
+                </div>
+                <p>{{ memory.content }}</p>
+                <div class="memory-card-actions">
+                  <button class="text-button" @click="editMemory(memory)">编辑</button>
+                  <button class="text-button danger-text" @click="removeMemory(memory.id)">删除</button>
+                </div>
+              </article>
+            </div>
+          </div>
+        </section>
+
+        <section v-else-if="activeView === 'research'" class="view">
+          <div class="page-heading compact-heading">
+            <div>
+              <p class="eyebrow">INTERVIEW EXPERIENCE RESEARCH</p>
+              <h1>面经搜索</h1>
+              <p class="heading-copy">
+                搜索牛客公开面经的标题、摘要和来源链接，不抓取或保存整篇原文。
+              </p>
+            </div>
+            <span class="library-count">{{ researchResults.length }} RESULTS</span>
+          </div>
+          <div class="research-search form-sheet">
+            <div class="form-row">
+              <label class="field-label">公司<input v-model.trim="researchForm.company" placeholder="例如：字节跳动" /></label>
+              <label class="field-label">岗位<input v-model.trim="researchForm.role" placeholder="例如：Java 后端开发" /></label>
+            </div>
+            <label class="field-label">关键词<input v-model.trim="researchForm.keywords" placeholder="例如：Redis 一面 校招" @keydown.enter="searchResearch" /></label>
+            <div class="research-actions">
+              <span>结果来自搜索服务，建议打开来源链接核对原文和时间。</span>
+              <button class="dark-button" :disabled="researchLoading" @click="searchResearch">
+                {{ researchLoading ? "搜索中..." : "搜索牛客面经" }} →
+              </button>
+            </div>
+          </div>
+          <div v-if="!researchResults.length && !researchLoading" class="empty-state research-empty">
+            <strong>输入目标公司和岗位开始搜索</strong>
+            <span>例如：字节跳动 · Java 后端 · Redis 一面</span>
+          </div>
+          <div v-else class="research-results">
+            <article v-for="item in researchResults" :key="item.url" class="research-card">
+              <div class="memory-card-head">
+                <span class="tag">{{ item.source }}</span>
+                <a :href="item.url" target="_blank" rel="noopener noreferrer">打开来源 ↗</a>
+              </div>
+              <h2>{{ item.title }}</h2>
+              <p>{{ item.snippet || "该结果没有提供摘要，请打开来源查看。" }}</p>
+              <small>{{ item.url }}</small>
+            </article>
           </div>
         </section>
 

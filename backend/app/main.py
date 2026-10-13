@@ -1,39 +1,69 @@
 import json
 import uuid
 
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Response, UploadFile
+from fastapi import (
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    Header,
+    HTTPException,
+    Response,
+    UploadFile,
+)
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.graph import build_interview_graph
 from app.schemas import (
-    ApplicationAdaptationResponse,
     AnswerEvaluationResponse,
+    ApplicationAdaptationResponse,
+    AuthResponse,
     CandidateProfile,
     InterviewResponse,
-    AuthResponse,
+    InterviewSessionAnalysis,
+    InterviewSessionTurn,
     LoginRequest,
+    MemoryItem,
     ModelConfig,
     QuestionBankItem,
     RegisterRequest,
     TranscriptionResponse,
-    InterviewSessionAnalysis,
-    InterviewSessionTurn,
     UserResponse,
 )
-from app.services.auth import authenticate_user, create_access_token, create_user, decode_access_token, init_auth_database
+from app.services.auth import (
+    authenticate_user,
+    create_access_token,
+    create_user,
+    decode_access_token,
+    init_auth_database,
+)
+from app.services.memory import (
+    create_memory,
+    delete_memory,
+    init_memory_database,
+    list_interview_sessions,
+    list_memories,
+    save_interview_session,
+    update_memory,
+)
 from app.services.pdf import extract_pdf_text
 from app.services.profile import (
     create_profile_draft,
     extract_document_text,
-    extract_profile,
     extract_profile_with_ai,
     get_latest_profile_context,
     init_profile_database,
     list_profile_versions,
     save_profile_version,
 )
-from app.services.providers import adapt_application, analyze_interview_session, evaluate_answer, get_question_bank
+from app.services.providers import (
+    adapt_application,
+    analyze_interview_session,
+    evaluate_answer,
+    get_question_bank,
+)
+from app.services.research import search_interview_experiences
 from app.services.resume_builder import build_resume_docx
 from app.services.transcription import transcribe_audio
 
@@ -49,6 +79,7 @@ app.add_middleware(
 interview_graph = build_interview_graph()
 init_auth_database(settings)
 init_profile_database(settings)
+init_memory_database(settings)
 
 
 @app.get("/api/health")
@@ -185,16 +216,87 @@ async def evaluate_interview_answer(
 async def analyze_interview_session_endpoint(
     turns_json: str = Form(...),
     model_config_json: str = Form(..., alias="model_config"),
+    job_description: str = Form(""),
     user: UserResponse = Depends(current_user),
 ) -> InterviewSessionAnalysis:
     try:
         turns = [InterviewSessionTurn.model_validate(item) for item in json.loads(turns_json)]
         config = ModelConfig.model_validate(json.loads(model_config_json))
-        return analyze_interview_session(turns, config)
+        analysis = analyze_interview_session(turns, config)
+        save_interview_session(settings, user.id, job_description, turns, analysis)
+        return analysis
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     except Exception as error:
         raise HTTPException(status_code=502, detail=f"整场面试分析失败：{error}") from error
+
+
+@app.post("/api/memory", response_model=MemoryItem, status_code=201)
+def create_memory_item(
+    payload: MemoryItem,
+    user: UserResponse = Depends(current_user),
+) -> MemoryItem:
+    if payload.id is not None or payload.source_session_id is not None:
+        raise HTTPException(status_code=422, detail="新记忆不能携带 id 或来源会话。")
+    return create_memory(settings, user.id, payload)
+
+
+@app.put("/api/memory/{memory_id}", response_model=MemoryItem)
+def update_memory_item(
+    memory_id: int,
+    payload: MemoryItem,
+    user: UserResponse = Depends(current_user),
+) -> MemoryItem:
+    if payload.id is not None or payload.source_session_id is not None:
+        raise HTTPException(status_code=422, detail="更新记忆不能修改 id 或来源会话。")
+    updated = update_memory(settings, user.id, memory_id, payload)
+    if not updated:
+        raise HTTPException(status_code=404, detail="记忆不存在。")
+    return updated
+
+
+@app.get("/api/memory", response_model=list[MemoryItem])
+def get_memory_items(
+    memory_type: str | None = None,
+    user: UserResponse = Depends(current_user),
+) -> list[MemoryItem]:
+    return list_memories(settings, user.id, memory_type)
+
+
+@app.delete("/api/memory/{memory_id}", status_code=204)
+def remove_memory_item(
+    memory_id: int,
+    user: UserResponse = Depends(current_user),
+) -> None:
+    if not delete_memory(settings, user.id, memory_id):
+        raise HTTPException(status_code=404, detail="记忆不存在。")
+
+
+@app.get("/api/interviews/sessions")
+def get_interview_sessions(user: UserResponse = Depends(current_user)) -> list[dict]:
+    return list_interview_sessions(settings, user.id)
+
+
+@app.get("/api/research/interview-experiences")
+def research_interview_experiences(
+    company: str = "",
+    role: str = "",
+    keywords: str = "",
+    max_results: int = 8,
+    user: UserResponse = Depends(current_user),
+) -> dict:
+    del user
+    try:
+        return {
+            "query": " ".join(part for part in (company, role, keywords) if part.strip()),
+            "results": search_interview_experiences(
+                settings, company, role, keywords, max_results
+            ),
+        }
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except Exception as error:
+        raise HTTPException(status_code=502, detail=f"面经搜索失败：{error}") from error
 
 
 @app.post("/api/interviews/generate", response_model=InterviewResponse)
@@ -233,6 +335,7 @@ async def generate_interview(
                 "job_description": job_description,
                 "model_config": config,
                 "profile": profile,
+                "memories": list_memories(settings, user.id),
             }
         )
         return InterviewResponse(

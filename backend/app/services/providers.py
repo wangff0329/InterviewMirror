@@ -5,15 +5,15 @@ from langchain_openai import ChatOpenAI
 
 from app.schemas import (
     AnswerEvaluation,
+    ApplicationAdaptation,
     CandidateProfile,
     InterviewPlan,
-    ModelConfig,
-    QuestionBankItem,
-    ApplicationAdaptation,
     InterviewSessionAnalysis,
     InterviewSessionTurn,
+    MemoryItem,
+    ModelConfig,
+    QuestionBankItem,
 )
-
 
 QUESTION_BANK = [
     QuestionBankItem(
@@ -276,9 +276,18 @@ def generate_plan(
     resume_text: str,
     config: ModelConfig,
     profile: CandidateProfile | dict | None = None,
+    memories: list[MemoryItem] | None = None,
 ) -> InterviewPlan:
     if config.provider == "demo":
-        return DEMO_PLAN
+        plan = DEMO_PLAN.model_copy(deep=True)
+        weaknesses = [
+            memory.content
+            for memory in memories or []
+            if memory.memory_type == "weakness"
+        ]
+        if weaknesses:
+            plan.risk_points = list(dict.fromkeys(weaknesses + plan.risk_points))[:8]
+        return plan
     if not config.api_key or not config.base_url:
         raise ValueError("在线模型需要同时配置 API Key 和 Base URL。")
 
@@ -320,6 +329,9 @@ JSON schema:
 
 候选人自定义画像：
 {json.dumps(profile.model_dump(mode="json") if isinstance(profile, CandidateProfile) else (profile or {}), ensure_ascii=False)}
+
+候选人历史训练记忆（只用于针对性提问，不要把记忆当作未经验证的事实）：
+{json.dumps([memory.model_dump(mode="json") for memory in (memories or [])], ensure_ascii=False)}
 """
     result = llm.invoke(prompt)
     return InterviewPlan.model_validate(_extract_json(result.content))

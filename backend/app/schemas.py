@@ -107,6 +107,16 @@ class InterviewSessionAnalysis(BaseModel):
     next_practice_plan: list[str]
 
 
+class MemoryItem(BaseModel):
+    id: int | None = None
+    memory_type: Literal["fact", "strength", "weakness", "preference", "goal", "plan"]
+    content: str = Field(min_length=1, max_length=4000)
+    confidence: float = Field(default=1, ge=0, le=1)
+    source_session_id: int | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
 class TranscriptionResponse(BaseModel):
     text: str
     duration_seconds: float | None = None

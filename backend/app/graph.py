@@ -2,7 +2,7 @@ from typing import TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
-from app.schemas import CandidateProfile, InterviewPlan, ModelConfig
+from app.schemas import CandidateProfile, InterviewPlan, MemoryItem, ModelConfig
 from app.services.pdf import extract_pdf_text
 from app.services.providers import generate_plan
 
@@ -14,6 +14,7 @@ class InterviewState(TypedDict, total=False):
     profile: CandidateProfile | dict
     resume_text: str
     plan: InterviewPlan
+    memories: list[MemoryItem]
 
 
 def extract_resume(state: InterviewState) -> InterviewState:
@@ -28,6 +29,7 @@ def generate_interview_plan(state: InterviewState) -> InterviewState:
         state["resume_text"],
         state["model_config"],
         state.get("profile"),
+        state.get("memories", []),
     )
     return {"plan": plan}
 
